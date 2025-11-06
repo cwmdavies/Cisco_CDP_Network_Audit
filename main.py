@@ -27,7 +27,7 @@ Requirements:
 - Packages: pandas, openpyxl, textfsm, paramiko, netmiko
 - (Optional, Windows only) pywin32 for Credential Manager integration
 
-Author: CHristopher Davies
+Author: Christopher Davies
 Date: 06/11/2025
 """
 import os
