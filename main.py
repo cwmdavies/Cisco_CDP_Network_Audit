@@ -66,7 +66,6 @@ except ImportError:
     from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
 from paramiko.ssh_exception import SSHException
 
-
 # --------------------------------------------------------------------------------------
 # Logging bootstrap (HYBRID): try fileConfig() if a logging.conf exists; otherwise fallback
 # --------------------------------------------------------------------------------------
