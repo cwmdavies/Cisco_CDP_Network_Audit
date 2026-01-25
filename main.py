@@ -121,6 +121,10 @@ Example (Typical Session)
 -------------------------
 The interactive prompts guide you through site name, seeds, credentials, and (optionally) a jump server.
 On completion the tool summarizes discovered devices, CDP entries, and error counts.
+
+Author: Chris Davies
+Email: chris.davies@weavermanor.co.uk
+License: GNU GENERAL PUBLIC LICENSE Version 3
 """
 import os
 import sys
