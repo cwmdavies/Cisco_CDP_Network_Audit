@@ -141,6 +141,7 @@ import openpyxl
 import textfsm
 import paramiko
 from netmiko import ConnectHandler
+from ProgramFiles.config_files.config import JUMP_HOST, CRED_TARGET, ALT_CREDS
 try:
     # Newer netmiko
     from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -205,8 +206,9 @@ class CredentialManager:
     """
 
     def __init__(self):
-        self.primary_target = os.getenv("CDP_PRIMARY_CRED_TARGET", "MyApp/ADM")
-        self.answer_target = os.getenv("CDP_ANSWER_CRED_TARGET", "MyApp/Answer")
+        self.primary_target = os.getenv("CDP_PRIMARY_CRED_TARGET", CRED_TARGET)
+        self.answer_target  = os.getenv("CDP_ANSWER_CRED_TARGET",  ALT_CREDS)
+
 
     def _read_win_cred(self, target_name: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -981,17 +983,39 @@ def main() -> None:
     site_name, seeds, primary_user, primary_pass, answer_user, answer_pass = creds.prompt_for_inputs()
 
     # If jump server provided via env use it, otherwise prompt
-    jump_server = os.getenv("CDP_JUMP_SERVER", "").strip()
-    if not jump_server:
-        jump_server = input(
-            "\nEnter jump server IP/hostname (or leave blank to use device directly)\n"
-            "Enter IP Address: "
-        ).strip()
 
-    if not jump_server:
-        logger.info("No jump server provided; connecting directly to devices.")
-    else:
+    config_jump = (JUMP_HOST or "").strip()
+    env_jump    = os.getenv("CDP_JUMP_SERVER", "").strip()
+    default_jump = env_jump if env_jump else config_jump  # env wins; else config; else ""
+
+    # Interactive choice: use jump host or go direct?
+    use_jump_ans = input(
+        f"\nUse jump host '{default_jump}'? [Y/n]\n"
+        "Press Enter to accept the default shown. "
+    ).strip().lower()
+
+    use_jump = True if use_jump_ans in ("", "y", "yes") else False
+
+    jump_server = ""
+    if use_jump:
+        if default_jump:
+            # Offer override of the default jump host
+            override = input(
+                f"Press Enter to use '{default_jump}', or type a different jump host: "
+            ).strip()
+            jump_server = override if override else default_jump
+        else:
+            # No default known; ask for one
+            jump_server = input(
+                "Enter jump server IP/hostname (leave blank to go direct): "
+            ).strip()
+
+    # Final outcome logging
+    if jump_server:
         logger.info("Using jump server: %s", jump_server)
+    else:
+        logger.info("No jump server selected; connecting directly to devices.")
+
 
     # Validate seeds: accept IPs or resolvable hostnames; normalize to IPs
     validated_seeds_set: Set[str] = set()

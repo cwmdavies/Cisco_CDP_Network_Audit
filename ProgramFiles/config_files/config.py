@@ -1,0 +1,3 @@
+JUMP_HOST = "10.112.250.6"
+CRED_TARGET = "MyApp/ADM"
+ALT_CREDS = "MyApp/Answer"
