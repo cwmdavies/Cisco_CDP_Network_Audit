@@ -145,7 +145,7 @@ import openpyxl
 import textfsm
 import paramiko
 from netmiko import ConnectHandler
-from ProgramFiles.config_files.config import JUMP_HOST, CRED_TARGET, ALT_CREDS
+from ProgramFiles.config_files import config
 try:
     # Newer netmiko
     from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -168,7 +168,7 @@ def _configure_logging() -> None:
     If neither path exists, configure a basic console logger at INFO level.
     """
     cfg_env = os.getenv("LOGGING_CONFIG", "").strip()
-    default_cfg = Path("ProgramFiles") / "Config_Files" / "logging.conf"  # case-sensitive on non-Windows
+    default_cfg = config.LOGGING_CONFIG_PATH
     cfg_path = Path(cfg_env) if cfg_env else default_cfg
 
     if cfg_path.exists():
@@ -186,16 +186,10 @@ _configure_logging()
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------------------
-# Minimal config (can be overridden with environment variables)
+# Config values (can be overridden with environment variables)
 # --------------------------------------------------------------------------------------
-DEFAULT_LIMIT = int(os.getenv("CDP_LIMIT", "10"))
-DEFAULT_TIMEOUT = int(os.getenv("CDP_TIMEOUT", "10"))
-
-BASE_DIR = Path(".")
-# NOTE: These paths are case-sensitive on Linux/macOS. Keep them consistent in your repo.
-CDP_TEMPLATE = BASE_DIR / "ProgramFiles" / "textfsm" / "cisco_ios_show_cdp_neighbors_detail.textfsm"
-VER_TEMPLATE = BASE_DIR / "ProgramFiles" / "textfsm" / "cisco_ios_show_version.textfsm"
-EXCEL_TEMPLATE = BASE_DIR / "ProgramFiles" / "config_files" / "1 - CDP Network Audit _ Template.xlsx"
+DEFAULT_LIMIT = int(os.getenv("CDP_LIMIT", str(config.DEFAULT_LIMIT)))
+DEFAULT_TIMEOUT = int(os.getenv("CDP_TIMEOUT", str(config.DEFAULT_TIMEOUT)))
 
 
 class CredentialManager:
@@ -210,8 +204,8 @@ class CredentialManager:
     """
 
     def __init__(self):
-        self.primary_target = os.getenv("CDP_PRIMARY_CRED_TARGET", CRED_TARGET)
-        self.answer_target  = os.getenv("CDP_ANSWER_CRED_TARGET",  ALT_CREDS)
+        self.primary_target = os.getenv("CDP_PRIMARY_CRED_TARGET", config.CRED_TARGET)
+        self.answer_target  = os.getenv("CDP_ANSWER_CRED_TARGET",  config.ALT_CREDS)
 
 
     def _read_win_cred(self, target_name: str) -> Tuple[Optional[str], Optional[str]]:
@@ -441,14 +435,11 @@ class ExcelReporter:
         # Build DataFrames for each sheet
         df = pd.DataFrame(
             details_list,
-            columns=[
-                "LOCAL_HOST", "LOCAL_IP", "LOCAL_PORT", "LOCAL_SERIAL", "LOCAL_UPTIME",
-                "DESTINATION_HOST", "REMOTE_PORT", "MANAGEMENT_IP", "PLATFORM",
-            ],
+            columns=config.EXCEL_AUDIT_COLUMNS,
         )
-        dns_array = pd.DataFrame(dns_ip.items(), columns=["Hostname", "IP Address"])
-        auth_array = pd.DataFrame(sorted(list(auth_errors)), columns=["Authentication Errors"])
-        conn_array = pd.DataFrame(conn_errors.items(), columns=["IP Address", "Error"])
+        dns_array = pd.DataFrame(dns_ip.items(), columns=config.EXCEL_DNS_COLUMNS)
+        auth_array = pd.DataFrame(sorted(list(auth_errors)), columns=config.EXCEL_AUTH_ERROR_COLUMNS)
+        conn_array = pd.DataFrame(conn_errors.items(), columns=config.EXCEL_CONN_ERROR_COLUMNS)
 
         # Create the output workbook by copying the template
         filepath = f"{site_name}_CDP_Network_Audit.xlsx"
@@ -458,21 +449,21 @@ class ExcelReporter:
         date_now = datetime.datetime.now().strftime("%d %B %Y")
         time_now = datetime.datetime.now().strftime("%H:%M")
         wb = openpyxl.load_workbook(filepath)
-        ws1 = wb["Audit"]
-        ws1["B4"] = site_name
-        ws1["B5"] = date_now
-        ws1["B6"] = time_now
-        ws1["B7"] = hosts[0] if hosts else ""
-        ws1["B8"] = hosts[1] if len(hosts) > 1 else "Secondary Seed device not given"
+        ws1 = wb[config.EXCEL_SHEET_AUDIT]
+        ws1[config.EXCEL_CELL_SITE_NAME] = site_name
+        ws1[config.EXCEL_CELL_DATE] = date_now
+        ws1[config.EXCEL_CELL_TIME] = time_now
+        ws1[config.EXCEL_CELL_PRIMARY_SEED] = hosts[0] if hosts else ""
+        ws1[config.EXCEL_CELL_SECONDARY_SEED] = hosts[1] if len(hosts) > 1 else config.EXCEL_SECONDARY_SEED_DEFAULT
         wb.save(filepath)
         wb.close()
 
         # Append tabular data using openpyxl engine in overlay mode
         with pd.ExcelWriter(filepath, engine="openpyxl", if_sheet_exists="overlay", mode="a") as writer:
-            df.to_excel(writer, index=False, sheet_name="Audit", header=False, startrow=11)
-            dns_array.to_excel(writer, index=False, sheet_name="DNS Resolved", header=False, startrow=4)
-            auth_array.to_excel(writer, index=False, sheet_name="Authentication Errors", header=False, startrow=4)
-            conn_array.to_excel(writer, index=False, sheet_name="Connection Errors", header=False, startrow=4)
+            df.to_excel(writer, index=False, sheet_name=config.EXCEL_SHEET_AUDIT, header=False, startrow=config.EXCEL_AUDIT_DATA_START_ROW)
+            dns_array.to_excel(writer, index=False, sheet_name=config.EXCEL_SHEET_DNS, header=False, startrow=config.EXCEL_OTHER_DATA_START_ROW)
+            auth_array.to_excel(writer, index=False, sheet_name=config.EXCEL_SHEET_AUTH_ERRORS, header=False, startrow=config.EXCEL_OTHER_DATA_START_ROW)
+            conn_array.to_excel(writer, index=False, sheet_name=config.EXCEL_SHEET_CONN_ERRORS, header=False, startrow=config.EXCEL_OTHER_DATA_START_ROW)
 
 
 class NetworkDiscoverer:
@@ -648,7 +639,7 @@ class NetworkDiscoverer:
         # Direct connection path (no jump)
         if not jump_host:
             conn = ConnectHandler(
-                device_type="cisco_ios",
+                device_type=config.DEVICE_TYPE,
                 host=target_ip,
                 username=d_user,
                 password=d_pass,
@@ -665,13 +656,13 @@ class NetworkDiscoverer:
         try:
             jump = self._paramiko_jump_client(jump_host, j_user, j_pass)
             transport = jump.get_transport()
-            dest_addr = (target_ip, 22)
+            dest_addr = (target_ip, config.SSH_PORT)
             local_addr = ("127.0.0.1", 0)
             channel = transport.open_channel("direct-tcpip", dest_addr, local_addr, timeout=self.timeout)
             logger.debug("[%s] Jump channel opened via %s", target_ip, jump_host)
 
             conn = ConnectHandler(
-                device_type="cisco_ios",
+                device_type=config.DEVICE_TYPE,
                 host=target_ip,
                 username=d_user,
                 password=d_pass,
@@ -815,9 +806,9 @@ class NetworkDiscoverer:
                     if host in self.visited:
                         continue
 
-                    # Attempt to discover device (up to 3 retries)
+                    # Attempt to discover device (up to MAX_RETRY_ATTEMPTS)
                     last_err = None
-                    for attempt in range(1, 4):
+                    for attempt in range(1, config.MAX_RETRY_ATTEMPTS + 1):
                         logger.info("[%s] %s Attempt %d: collecting CDP + version", host, tname, attempt)
                         try:
                             cdp_out, ver_out = self.run_device_commands(
@@ -880,11 +871,11 @@ class NetworkDiscoverer:
         except socket.gaierror as e:
             # DNS lookup failure (name not found, temporary failure, etc.)
             logger.debug("[DNS] Failed to resolve %s: %s", hname, e.strerror)
-            return hname, "UNRESOLVED"  # Consistent error marker for Excel
+            return hname, config.DNS_UNRESOLVED_MARKER
         except Exception as e:
             # Unexpected error (network issue, etc.)
             logger.exception("[DNS] Unexpected error resolving %s", hname)
-            return hname, "ERROR"  # Generic error marker
+            return hname, config.DNS_ERROR_MARKER
 
     def resolve_dns_parallel(self) -> None:
         """Resolve all collected hostnames using a thread pool."""
@@ -893,7 +884,7 @@ class NetworkDiscoverer:
         if not names:
             return
         # Keep the DNS pool modest; it's CPU/I/O light
-        with ThreadPoolExecutor(max_workers=min(32, max(4, self.limit))) as ex:
+        with ThreadPoolExecutor(max_workers=min(config.DNS_MAX_WORKERS, max(config.DNS_MIN_WORKERS, self.limit))) as ex:
             futs = [ex.submit(self.resolve_dns_for_host, n) for n in names]
             for f in as_completed(futs):
                 try:
@@ -921,7 +912,12 @@ def _validate_excel_template(template_path: Path) -> None:
     
     try:
         wb = openpyxl.load_workbook(template_path, data_only=False)
-        required_sheets = ['Audit', 'DNS Resolved', 'Authentication Errors', 'Connection Errors']
+        required_sheets = [
+            config.EXCEL_SHEET_AUDIT,
+            config.EXCEL_SHEET_DNS,
+            config.EXCEL_SHEET_AUTH_ERRORS,
+            config.EXCEL_SHEET_CONN_ERRORS
+        ]
         missing_sheets = [sheet for sheet in required_sheets if sheet not in wb.sheetnames]
         
         if missing_sheets:
@@ -934,8 +930,8 @@ def _validate_excel_template(template_path: Path) -> None:
             raise SystemExit(1)
         
         # Verify Audit sheet has expected cells
-        audit_sheet = wb['Audit']
-        if not audit_sheet['B4'].value is not None and audit_sheet['B4'].value:
+        audit_sheet = wb[config.EXCEL_SHEET_AUDIT]
+        if not audit_sheet[config.EXCEL_CELL_SITE_NAME].value is not None and audit_sheet[config.EXCEL_CELL_SITE_NAME].value:
             logger.warning("Audit sheet may not be properly formatted (B4 seems empty)")
         
         wb.close()
@@ -963,9 +959,9 @@ def main() -> None:
     # Use minimal config (env overrides allowed)
     limit = DEFAULT_LIMIT
     timeout = DEFAULT_TIMEOUT
-    cdp_template = CDP_TEMPLATE
-    ver_template = VER_TEMPLATE
-    excel_template = EXCEL_TEMPLATE
+    cdp_template = config.CDP_TEMPLATE
+    ver_template = config.VER_TEMPLATE
+    excel_template = config.EXCEL_TEMPLATE
 
     # Validate template and excel files early (fail fast)
     missing = []
@@ -988,7 +984,7 @@ def main() -> None:
 
     # If jump server provided via env use it, otherwise prompt
 
-    config_jump = (JUMP_HOST or "").strip()
+    config_jump = (config.JUMP_HOST or "").strip()
     env_jump    = os.getenv("CDP_JUMP_SERVER", "").strip()
     default_jump = env_jump if env_jump else config_jump  # env wins; else config; else ""
 
